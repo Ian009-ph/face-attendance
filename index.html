@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face Attendance</title>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#eef1f4; --panel:#fff; --ink:#16212c; --mute:#5d6b79;
+  --line:#d5dbe1; --teal:#0b7a75; --out:#b45309; --bad:#b42318;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 'Public Sans',system-ui,sans-serif; }
+header { display:flex; align-items:center; justify-content:space-between; gap:16px; flex-wrap:wrap; padding:14px 24px; background:var(--ink); color:#fff; }
+header h1 { margin:0; font-size:18px; font-weight:800; }
+#clock { font-size:28px; font-weight:800; font-variant-numeric:tabular-nums; }
+nav button { background:none; border:0; color:#aab6c2; font:inherit; font-weight:600; padding:8px 14px; cursor:pointer; border-bottom:3px solid transparent; }
+nav button.on { color:#fff; border-color:#4fd1c5; }
+main { max-width:1000px; margin:24px auto; padding:0 16px; }
+.grid { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:20px; }
+@media (max-width:760px) { .grid { grid-template-columns:1fr; } header { padding:12px 16px; } }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:18px; min-width:0; }
+.cam { position:relative; background:#000; border-radius:6px; overflow:hidden; aspect-ratio:4/3; border:4px solid transparent; }
+.cam.ok { border-color:var(--teal); }
+.cam.out { border-color:var(--out); }
+.cam.bad { border-color:var(--bad); }
+video { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); display:block; }
+#status { margin:12px 0 0; font-weight:600; }
+#result { font-size:26px; font-weight:800; margin:0 0 4px; overflow-wrap:anywhere; }
+.tag { display:inline-block; padding:2px 10px; border-radius:99px; color:#fff; font-weight:700; }
+.tag.IN { background:var(--teal); }
+.tag.OUT { background:var(--out); }
+.muted { color:var(--mute); }
+label { display:block; font-weight:600; margin:12px 0 4px; }
+input { width:100%; padding:9px 10px; border:1px solid var(--line); border-radius:6px; font:inherit; }
+button.btn { margin-top:14px; padding:10px 16px; border:0; border-radius:6px; background:var(--teal); color:#fff; font:inherit; font-weight:700; cursor:pointer; }
+button.btn:disabled { opacity:.5; cursor:wait; }
+button.link { background:none; border:0; color:var(--bad); cursor:pointer; font:inherit; }
+table { width:100%; border-collapse:collapse; margin-top:8px; }
+th,td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+th { color:var(--mute); font-weight:600; }
+.hide { display:none !important; }
+#recent { padding:0; margin:8px 0 0; }
+#recent li { padding:6px 0; border-bottom:1px solid var(--line); list-style:none; }
+.table-wrap { overflow-x:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Face Attendance</h1>
+  <nav>
+    <button id="t-kiosk" class="on" onclick="show('kiosk')">Check in</button>
+    <button id="t-admin" onclick="show('admin')">Admin</button>
+  </nav>
+  <div id="clock"></div>
+</header>
+
+<main>
+  <section id="kiosk" class="grid">
+    <div class="panel">
+      <div id="camSlotKiosk">
+        <div class="cam" id="camBox"><video id="video" autoplay muted playsinline></video></div>
+      </div>
+      <p id="status" class="muted">Loading face models…</p>
+    </div>
+    <div class="panel">
+      <p id="result">Waiting for a face</p>
+      <p id="resultSub" class="muted">Look at the camera and hold still for a moment.</p>
+      <h3>Recent scans</h3>
+      <ul id="recent"></ul>
+    </div>
+  </section>
+
+  <section id="admin" class="hide">
+    <div class="panel" id="lock">
+      <label for="pin">Admin PIN</label>
+      <input id="pin" type="password" autocomplete="current-password" placeholder="Enter PIN">
+      <button class="btn" onclick="unlock()">Unlock</button>
+      <p id="lockMsg" style="color:var(--bad)"></p>
+    </div>
+
+    <div id="adminBody" class="hide">
+      <div class="grid">
+        <div class="panel">
+          <h3 style="margin-top:0">Register a person</h3>
+          <div id="camSlotAdmin"></div>
+          <p id="diag" class="muted" style="font-size:13px;margin:8px 0 0"></p>
+          <label for="empId">Employee ID</label>
+          <input id="empId" autocomplete="off">
+          <label for="empName">Full name</label>
+          <input id="empName" autocomplete="name">
+          <p class="muted">Face the camera. The system will capture 5 samples.</p>
+          <button class="btn" id="regBtn" onclick="register()">Capture face and save</button>
+          <p id="regMsg" class="muted" aria-live="polite"></p>
+          <button class="link" onclick="logout()">Lock admin</button>
+        </div>
+        <div class="panel">
+          <h3 style="margin-top:0">Registered people</h3>
+          <div class="table-wrap">
+            <table><thead><tr><th>ID</th><th>Name</th><th>Action</th></tr></thead><tbody id="empRows"></tbody></table>
+          </div>
+        </div>
+      </div>
+      <div class="panel" style="margin-top:20px">
+        <label for="logDate" style="margin-top:0">Attendance on</label>
+        <input type="date" id="logDate" style="max-width:200px" onchange="loadLogs()">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>ID</th><th>Name</th><th>Type</th></tr></thead>
+            <tbody id="logRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/dist/face-api.js"></script>
+<script>
+'use strict';
+
+const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.12/model/';
+const MATCH_THRESHOLD = 0.50;
+const CONFIRM_FRAMES = 3;
+
+// Paste the URL of your deployed Google Apps Script web app.
+const API_URL = 'https://script.google.com/macros/s/AKfycbybhykmW3MsbMb0iu2xEkRsbsRCTTwVGk-fyJ_CtrYhExwt6qzFvTx17EvzDeY--ATm/exec';
+
+// Must match API_KEY in Code.gs. This key is visible to anyone who can access this page.
+const API_KEY = 'SPI-Attendance-2026-ian';
+
+const $ = id => document.getElementById(id);
+
+async function run(action, ...args) {
+  const response = await fetch(API_URL, {
+    method: 'POST',
+    redirect: 'follow',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ key: API_KEY, action, args })
+  });
+
+  if (!response.ok) throw new Error('Server returned HTTP ' + response.status);
+
+  const result = await response.json();
+  if (!result.ok) throw new Error(result.error || 'API request failed.');
+  return result.data;
+}
+
+let employees = [];
+let matcher = null;
+let busy = false;
+let adminPin = '';
+let streak = { id: null, n: 0 };
+let lastSent = Object.create(null);
+let initError = '';
+let cameraStream = null;
+let loopTimer = null;
+
+const detectorOpts = new faceapi.TinyFaceDetectorOptions({
+  inputSize: 320,
+  scoreThreshold: 0.5
+});
+
+setInterval(() => {
+  $('clock').textContent = new Date().toLocaleTimeString([], { hour12: false });
+}, 500);
+
+function show(tab) {
+  ['kiosk', 'admin'].forEach(t => {
+    $(t).classList.toggle('hide', t !== tab);
+    $('t-' + t).classList.toggle('on', t === tab);
+  });
+  placeCamera();
+}
+
+function placeCamera() {
+  const adminOpen =
+    !$('admin').classList.contains('hide') &&
+    !$('adminBody').classList.contains('hide');
+
+  const slot = adminOpen ? $('camSlotAdmin') : $('camSlotKiosk');
+  const cam = $('camBox');
+
+  if (!slot.contains(cam)) slot.appendChild(cam);
+
+  if (cameraStream && $('video').paused) {
+    $('video').play().catch(() => {});
+  }
+}
+
+async function init() {
+  try {
+    $('status').textContent = 'Loading face recognition models…';
+
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+      faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+    ]);
+
+    try {
+      await faceapi.tf.setBackend('webgl');
+      await faceapi.tf.ready();
+    } catch (e) {
+      try {
+        await faceapi.tf.setBackend('cpu');
+        await faceapi.tf.ready();
+      } catch (ignored) {
+        // Use the library's default backend.
+      }
+    }
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('Camera access requires HTTPS or localhost and a supported browser.');
+    }
+
+    $('status').textContent = 'Requesting camera access…';
+
+    cameraStream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: {
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+        facingMode: 'user'
+      }
+    });
+
+    $('video').srcObject = cameraStream;
+    await new Promise((resolve, reject) => {
+      if ($('video').readyState >= 1) return resolve();
+      $('video').onloadedmetadata = resolve;
+      $('video').onerror = () => reject(new Error('Could not load camera video.'));
+    });
+    await $('video').play();
+
+    await refreshEmployees();
+    $('status').textContent = 'Ready. Look at the camera.';
+    loop();
+  } catch (e) {
+    initError = (e.name ? e.name + ': ' : '') + e.message;
+    let hint = ' Check camera permissions and reload.';
+    if (e.name === 'NotAllowedError') hint = ' Allow camera access in the browser address bar, then reload.';
+    if (e.name === 'NotFoundError') hint = ' No camera was found on this device.';
+    if (e.name === 'NotReadableError') hint = ' Another application may be using the camera.';
+    $('status').textContent = 'Could not start: ' + initError + '.' + hint;
+  }
+}
+
+setInterval(() => {
+  if (!$('diag')) return;
+  const cam = cameraStream && $('video').videoWidth ? 'on' : 'off';
+  const models = faceapi.nets.tinyFaceDetector.isLoaded &&
+    faceapi.nets.faceRecognitionNet.isLoaded ? 'loaded' : 'loading';
+  $('diag').textContent = 'Camera: ' + cam + ' | Face models: ' + models +
+    (initError ? ' | Error: ' + initError : '');
+}, 1000);
+
+async function refreshEmployees() {
+  employees = await run('getEmployees');
+
+  const labeled = employees
+    .filter(e => Array.isArray(e.descriptors) && e.descriptors.length)
+    .map(e => new faceapi.LabeledFaceDescriptors(
+      e.id,
+      e.descriptors.map(d => new Float32Array(d))
+    ));
+
+  matcher = labeled.length ? new faceapi.FaceMatcher(labeled, MATCH_THRESHOLD) : null;
+}
+
+function setCam(cls) {
+  $('camBox').className = 'cam ' + (cls || '');
+}
+
+async function detect() {
+  const video = $('video');
+
+  if (!video.srcObject || video.readyState < 2 || !video.videoWidth) {
+    throw new Error('Camera is not running. Allow camera access and reload.');
+  }
+  if (!faceapi.nets.tinyFaceDetector.isLoaded) {
+    throw new Error('Face models are still loading.');
+  }
+
+  let timer;
+  try {
+    const detection = faceapi
+      .detectSingleFace(video, detectorOpts)
+      .withFaceLandmarks()
+      .withFaceDescriptor();
+
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Face detection timed out.')), 15000);
+    });
+
+    return await Promise.race([detection, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loop() {
+  if (!busy && cameraStream) {
+    try {
+      const detection = await detect();
+
+      if (!detection) {
+        streak = { id: null, n: 0 };
+        setCam('');
+        $('status').textContent = 'No face detected';
+      } else if (!matcher) {
+        $('status').textContent = 'No employees registered. Open Admin to add people.';
+      } else {
+        const best = matcher.findBestMatch(detection.descriptor);
+
+        if (best.label === 'unknown') {
+          streak = { id: null, n: 0 };
+          setCam('bad');
+          $('status').textContent = 'Face not recognised';
+        } else {
+          streak = streak.id === best.label
+            ? { id: best.label, n: streak.n + 1 }
+            : { id: best.label, n: 1 };
+
+          $('status').textContent = 'Verifying… ' + streak.n + '/' + CONFIRM_FRAMES;
+
+          if (streak.n >= CONFIRM_FRAMES) await mark(best.label);
+        }
+      }
+    } catch (e) {
+      $('status').textContent = e.message;
+    }
+  }
+
+  loopTimer = setTimeout(loop, 350);
+}
+
+async function mark(id) {
+  if (Date.now() - (lastSent[id] || 0) < 10000) return;
+
+  lastSent[id] = Date.now();
+  busy = true;
+  streak = { id: null, n: 0 };
+  $('status').textContent = 'Saving attendance…';
+
+  try {
+    const result = await run('recordAttendance', id);
+    setCam(result.duplicate ? '' : (result.type === 'IN' ? 'ok' : 'out'));
+
+    $('result').textContent = result.name;
+    $('resultSub').textContent = result.duplicate
+      ? 'Already recorded as ' + result.type + ' at ' + result.time
+      : result.type + ' recorded at ' + result.time;
+
+    if (!result.duplicate) {
+      const li = document.createElement('li');
+      li.textContent = result.time + '  ' + result.name + '  (' + result.type + ')';
+      $('recent').prepend(li);
+      while ($('recent').children.length > 8) $('recent').lastChild.remove();
+    }
+
+    $('status').textContent = result.duplicate ? 'Already recorded' : 'Attendance saved';
+  } catch (e) {
+    setCam('bad');
+    $('status').textContent = e.message;
+    delete lastSent[id];
+  }
+
+  setTimeout(() => {
+    busy = false;
+    setCam('');
+  }, 2500);
+}
+
+/* ---------------- Admin ---------------- */
+
+async function unlock() {
+  $('lockMsg').textContent = '';
+  try {
+    const enteredPin = $('pin').value;
+    await run('verifyPin', enteredPin);
+    adminPin = enteredPin;
+
+    $('lock').classList.add('hide');
+    $('adminBody').classList.remove('hide');
+
+    placeCamera();
+    $('logDate').value = localDateString();
+
+    await refreshEmployees();
+    renderEmployees();
+    await loadLogs();
+  } catch (e) {
+    $('lockMsg').textContent = e.message;
+  }
+}
+
+function logout() {
+  adminPin = '';
+  $('pin').value = '';
+  $('adminBody').classList.add('hide');
+  $('lock').classList.remove('hide');
+  $('lockMsg').textContent = '';
+  show('kiosk');
+}
+
+function localDateString() {
+  const d = new Date();
+  const offset = d.getTimezoneOffset();
+  return new Date(d.getTime() - offset * 60000).toISOString().slice(0, 10);
+}
+
+function renderEmployees() {
+  const body = $('empRows');
+  body.replaceChildren();
+
+  if (!employees.length) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 3;
+    td.textContent = 'No employees registered.';
+    td.className = 'muted';
+    tr.appendChild(td);
+    body.appendChild(tr);
+    return;
+  }
+
+  employees.forEach(employee => {
+    const tr = document.createElement('tr');
+    const id = document.createElement('td');
+    const name = document.createElement('td');
+    const action = document.createElement('td');
+    const button = document.createElement('button');
+
+    id.textContent = employee.id;
+    name.textContent = employee.name;
+    button.className = 'link';
+    button.textContent = 'Remove';
+
+    button.onclick = async () => {
+      if (!confirm('Remove ' + employee.name + '?')) return;
+
+      button.disabled = true;
+      try {
+        await run('deleteEmployee', adminPin, employee.id);
+        await refreshEmployees();
+        renderEmployees();
+      } catch (e) {
+        alert(e.message);
+        button.disabled = false;
+      }
+    };
+
+    action.appendChild(button);
+    tr.append(id, name, action);
+    body.appendChild(tr);
+  });
+}
+
+async function register() {
+  const id = $('empId').value.trim();
+  const name = $('empName').value.trim();
+
+  if (!id || !name) {
+    $('regMsg').textContent = 'Enter an employee ID and full name.';
+    return;
+  }
+
+  $('regBtn').disabled = true;
+  busy = true;
+  const samples = [];
+
+  try {
+    for (let attempts = 0; samples.length < 5 && attempts < 50; attempts++) {
+      const detection = await detect();
+
+      if (detection) {
+        samples.push(Array.from(detection.descriptor, v => Number(v.toFixed(6))));
+        $('regMsg').textContent = 'Captured ' + samples.length + '/5 face samples…';
+        await new Promise(resolve => setTimeout(resolve, 400));
+      } else {
+        $('regMsg').textContent =
+          'No face found (' + samples.length + '/5). Face the camera in good lighting.';
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
+
+    if (samples.length < 5) {
+      throw new Error('Could not capture 5 samples. Improve lighting and try again.');
+    }
+
+    await run('registerEmployee', adminPin, id, name, samples);
+    await refreshEmployees();
+    renderEmployees();
+
+    $('regMsg').textContent = 'Successfully saved ' + name + '.';
+    $('empId').value = '';
+    $('empName').value = '';
+  } catch (e) {
+    $('regMsg').textContent = e.message;
+  } finally {
+    $('regBtn').disabled = false;
+    busy = false;
+  }
+}
+
+async function loadLogs() {
+  if (!adminPin) return;
+
+  const body = $('logRows');
+  body.replaceChildren();
+
+  try {
+    const rows = await run('getLogs', adminPin, $('logDate').value);
+
+    if (!rows.length) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 4;
+      td.className = 'muted';
+      td.textContent = 'No records for this date.';
+      tr.appendChild(td);
+      body.appendChild(tr);
+      return;
+    }
+
+    rows.forEach(row => {
+      const tr = document.createElement('tr');
+      [row.time, row.id, row.name, row.type].forEach(value => {
+        const td = document.createElement('td');
+        td.textContent = value;
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    });
+  } catch (e) {
+    const tr = document.createElement('tr');
+    const td = document.createElement('td');
+    td.colSpan = 4;
+    td.textContent = 'Could not load logs: ' + e.message;
+    tr.appendChild(td);
+    body.appendChild(tr);
+  }
+}
+
+window.addEventListener('beforeunload', () => {
+  if (loopTimer) clearTimeout(loopTimer);
+  if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+});
+
+init();
+</script>
+</body>
+</html>
